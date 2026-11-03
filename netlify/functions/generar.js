@@ -1,12 +1,25 @@
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
 const KEY = process.env.GEMINI_API_KEY;
 const MAX_CHARS = 4 * 1024 * 1024;
 
-const SYS = `Eres asistente de diseño de práctica docente universitaria. Trabajas solo con el contenido de los documentos, el contexto y los datos que recibes. No inventes asignaturas, objetivos, criterios, cifras ni nombres. Si falta un dato, indícalo en "nota_faltante". No incluyas nombres de estudiantes ni datos que permitan identificarlos. Responde únicamente con JSON válido en español, sin texto fuera del JSON.`;
+const SYS = `Eres asistente de diseño de práctica docente universitaria. Trabajas solo con el contenido de los documentos, el contexto y los datos que recibes. No inventes asignaturas, unidades, objetivos, criterios, cifras ni nombres. Si falta un dato, indícalo en "nota_faltante". No incluyas nombres de estudiantes ni datos que permitan identificarlos. Responde únicamente con JSON válido en español, sin texto fuera del JSON.`;
 
-const PREG = `Con los documentos adjuntos, redacta entre 5 y 8 preguntas que el docente debe poder responder sobre su práctica: resultados de aprendizaje, criterios de evaluación, actividades previstas y cómo sabrá si los estudiantes avanzan. Formato: {"preguntas":[{"asignatura":"","pregunta":""}]}`;
+const PREG = `Con los documentos adjuntos, redacta entre 5 y 8 preguntas que el docente debe poder responder sobre su práctica: resultados de aprendizaje, criterios de evaluación, actividades previstas y cómo sabrá si los estudiantes avanzan. Cada pregunta indica la unidad o sección del documento de la que surge. Formato: {"preguntas":[{"asignatura":"","fuente":"","pregunta":""}]}`;
 
-const ESC = `Con los documentos, las respuestas del docente y la lista de asignaturas, crea exactamente dos escenarios de aula por asignatura registrada. Cada escenario plantea un problema que se deduce de los documentos o de las respuestas. Campos: asignatura, nombre (máximo seis palabras), title, nivel (1 o 2), tag, context (máximo 90 palabras, sin datos de estudiantes), options (exactamente cuatro, cada una con t, q con tres preguntas socráticas que no indiquen cuál opción es correcta, y r con n, b y ej), ejemplo (retroalimentación formativa que no dé la solución), reflexion (tres preguntas) y nota_faltante. ej puede ser {"tipo":"tabla","cab":[...],"filas":[[...]]}, {"tipo":"pasos","items":[...]} o {"tipo":"mensaje","texto":"..."}. Formato: {"escenarios":[...]}`;
+const ESC = `Con los documentos, las respuestas del docente, la lista de asignaturas y el diagnóstico de necesidades, crea exactamente dos escenarios de aula por asignatura registrada.
+
+Reglas:
+- Cada escenario corresponde a una unidad o sección distinta del documento. No repitas la misma unidad ni la misma categoría en dos escenarios de la misma asignatura.
+- El problema del escenario debe deducirse del documento o de las respuestas del docente. Si el docente respondió una pregunta relacionada, úsala para describir la situación.
+- Las opciones deben ser realistas con el diagnóstico: si el tiempo es menor a 10 minutos, si no hay plataforma virtual o si hay más de 35 estudiantes, las decisiones deben poder aplicarse con esas condiciones.
+- En "fuente" escribe la unidad o sección exacta del documento de la que sale el escenario.
+- Si algún dato del escenario no está en el documento, escríbelo en "nota_faltante". Si todo está respaldado, déjalo vacío.
+
+Campos de cada escenario: asignatura, fuente, nombre (máximo seis palabras), title, nivel (1 o 2), tag, context (máximo 90 palabras, sin datos de estudiantes), options (exactamente cuatro, cada una con t, q con tres preguntas socráticas que no indiquen cuál opción es correcta, y r con n, b y ej), ejemplo (retroalimentación formativa que no dé la solución), reflexion (tres preguntas) y nota_faltante.
+
+ej puede ser {"tipo":"tabla","cab":[...],"filas":[[...]]}, {"tipo":"pasos","items":[...]} o {"tipo":"mensaje","texto":"..."}.
+
+Formato: {"escenarios":[...]}`;
 
 const DEC = `Con el contexto del escenario que describe el docente, propón exactamente cuatro decisiones didácticas distintas que el docente podría tomar ante ese caso. Cada decisión es una acción concreta, escrita en una sola frase en infinitivo, por ejemplo "Dividir el grupo en parejas para resolver un caso breve". Las cuatro deben ser distintas entre sí. No indiques cuál es la mejor, no las califiques, no des la solución y no incluyas nombres de estudiantes. Formato: {"opciones":["","","",""]}`;
 
@@ -25,7 +38,7 @@ exports.handler = async (event) => {
   try { body = JSON.parse(event.body || "{}"); }
   catch { return json(400, { error: "Solicitud no válida." }); }
 
-  const { action, documentos = [], respuestas = [], asignaturas = [], contexto = "" } = body;
+  const { action, documentos = [], respuestas = [], asignaturas = [], contexto = "", diagnostico = null } = body;
   if (!["preguntas", "escenarios", "decisiones"].includes(action)) return json(400, { error: "Acción no válida." });
 
   const parts = [];
@@ -44,7 +57,8 @@ exports.handler = async (event) => {
         parts.push({ text: `Documento "${String(d.nombre).slice(0, 80)}":\n${d.texto.slice(0, 60000)}` });
       }
     }
-    parts.push({ text: `Asignaturas registradas: ${JSON.stringify(asignaturas)}\nRespuestas del docente: ${JSON.stringify(respuestas)}` });
+    const diag = diagnostico && typeof diagnostico === "object" ? JSON.stringify(diagnostico).slice(0, 1000) : "No disponible";
+    parts.push({ text: `Asignaturas registradas: ${JSON.stringify(asignaturas)}\nRespuestas del docente: ${JSON.stringify(respuestas)}\nDiagnóstico de necesidades: ${diag}` });
     parts.push({ text: action === "preguntas" ? PREG : ESC });
   }
 

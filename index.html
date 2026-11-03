@@ -787,4 +787,738 @@
             if (el.checked) {
                 if (el.value === 'ninguno') state.diagnostico[field] = ['ninguno'];
                 else {
-                    state.diagnostico
+                    state.diagnostico[field] = state.diagnostico[field].filter(v => v !== 'ninguno');
+                    state.diagnostico[field].push(el.value);
+                }
+            } else {
+                state.diagnostico[field] = state.diagnostico[field].filter(v => v !== el.value);
+            }
+            render();
+        }
+
+        function iniciarSimulacion() {
+            // Inicializar respuestas para la secuencia base si no existen
+            if(state.respuestasSesion.length === 0) {
+                state.respuestasSesion = state.secuenciaEscenarios.map(() => ({
+                    decision: null,
+                    preguntas: ['', '', ''],
+                    retro: '',
+                    reflexion: ['', '', '']
+                }));
+            }
+            setView('simulacion');
+        }
+
+        // --- VISTA 2: SIMULACIÓN (FLUJO PRINCIPAL) ---
+        function viewSimulacion() {
+            const esc = state.secuenciaEscenarios[state.indiceEscenarioActual];
+            const resp = state.respuestasSesion[state.indiceEscenarioActual];
+            
+            const num = state.indiceEscenarioActual + 1;
+            const total = state.secuenciaEscenarios.length;
+            const pasoNombres = ["Decisión", "Preguntas socráticas", "Recurso sugerido", "Retroalimentación", "Reflexión"];
+
+            // Barra de pasos
+            let barrasHtml = '<div class="progreso-container"><div class="barras">';
+            for(let i=1; i<=5; i++) {
+                let cls = 'barra-segmento';
+                if(i < state.pasoActual) cls += ' completado';
+                else if (i === state.pasoActual) cls += ' actual';
+                barrasHtml += `<div class="${cls}"></div>`;
+            }
+            barrasHtml += `</div><div class="progreso-texto">Escenario ${num} de ${total} · Paso ${state.pasoActual} de 5: ${pasoNombres[state.pasoActual-1]}</div></div>`;
+
+            let html = barrasHtml;
+            html += `<h2>${esc.nombre}</h2>`;
+            
+            // Requisito 1 de edición generados: Mostrar asignatura y fuente arriba
+            if(esc.fuente) {
+                 html += `<div class="rotulo" style="color: var(--text-sec); text-transform:none;">${esc.asignatura || 'Asignatura generada'} <br>Fuente: ${esc.fuente}</div>`;
+            }
+
+            html += `<div class="rotulo mb-4">Escenario ${num} · ${esc.titulo || esc.title}</div>`;
+            if (esc.etiqueta) html += `<div class="badge text-sec mb-4"><strong>${esc.etiqueta}</strong></div>`;
+            if (esc.resultado) html += `<div class="badge text-sec mb-4"><em>Resultado de aprendizaje: ${esc.resultado}</em></div>`;
+            
+            html += `<div class="panel-sec"><p>${esc.contexto || esc.context}</p></div>`;
+
+            if (state.pasoActual > 1 && resp.decision !== null) {
+                const optSeleccionada = esc.opciones[resp.decision];
+                html += `
+                    <div class="panel" style="border-left: 4px solid var(--accent-ocre);">
+                        <div class="rotulo">Tu decisión</div>
+                        <p>${optSeleccionada.texto || optSeleccionada.t}</p>
+                    </div>
+                `;
+            }
+
+            switch(state.pasoActual) {
+                case 1: html += renderPasoDecision(esc, resp); break;
+                case 2: html += renderPasoPreguntas(esc, resp); break;
+                case 3: html += renderPasoRecurso(esc, resp); break;
+                case 4: html += renderPasoRetro(esc, resp); break;
+                case 5: html += renderPasoReflexion(esc, resp); break;
+            }
+
+            return html;
+        }
+
+        function renderBottomNavSimulacion() {
+            DOMElements.bottomNav.classList.remove('hidden');
+            const resp = state.respuestasSesion[state.indiceEscenarioActual];
+            const canNext = state.pasoActual > 1 || resp.decision !== null;
+            
+            let txtSiguiente = "Siguiente";
+            if (state.pasoActual === 5) {
+                if (state.indiceEscenarioActual === state.secuenciaEscenarios.length - 1) {
+                    if (state.documentos.length > 0 && state.generacionesUsadas === 0) {
+                        txtSiguiente = "Siguiente fase";
+                    } else {
+                        txtSiguiente = "Ver cierre";
+                    }
+                } else {
+                    txtSiguiente = "Siguiente escenario";
+                }
+            }
+
+            DOMElements.bottomNav.innerHTML = `
+                <button class="btn-sec" onclick="navSim(-1)" ${state.pasoActual === 1 ? 'disabled' : ''}>Anterior</button>
+                <div class="nav-center">
+                    <button class="btn-sec" onclick="reiniciarEscenarioActual()">Reiniciar escenario</button>
+                    <button class="btn-main" onclick="navSim(1)" ${!canNext ? 'disabled' : ''}>${txtSiguiente}</button>
+                </div>
+            `;
+        }
+
+        function navSim(dir) {
+            if (dir === 1 && state.pasoActual === 5) {
+                if (state.indiceEscenarioActual < state.secuenciaEscenarios.length - 1) {
+                    state.indiceEscenarioActual++;
+                    state.pasoActual = 1;
+                    announce("Siguiente escenario.");
+                } else {
+                    if (state.documentos.length > 0 && state.generacionesUsadas === 0) {
+                        setView('pre-generacion');
+                    } else {
+                        setView('cierre');
+                    }
+                    return;
+                }
+            } else {
+                state.pasoActual += dir;
+                announce(`Paso ${state.pasoActual}.`);
+            }
+            render();
+            window.scrollTo(0,0);
+        }
+
+        function seleccionarDecision(idx) {
+            const resp = state.respuestasSesion[state.indiceEscenarioActual];
+            if (resp.decision !== idx) {
+                resp.decision = idx;
+                resp.preguntas = ['', '', '']; // Borrar solo preguntas socráticas si cambia
+            }
+            announce("Decisión elegida.");
+            render();
+        }
+
+        function reiniciarEscenarioActual() {
+            state.respuestasSesion[state.indiceEscenarioActual] = { decision: null, preguntas: ['', '', ''], retro: '', reflexion: ['', '', ''] };
+            state.pasoActual = 1;
+            announce("Escenario reiniciado.");
+            render();
+        }
+
+        // --- RENDER DE PASOS ---
+        function renderPasoDecision(esc, resp) {
+            return esc.opciones.map((opt, i) => `
+                <button class="btn-opcion ${resp.decision === i ? 'seleccionada' : ''}" onclick="seleccionarDecision(${i})">
+                    <div class="letra">${opt.letra || ['A','B','C','D'][i]}</div>
+                    <div>${opt.texto || opt.t}</div>
+                </button>
+            `).join('');
+        }
+
+        function renderPasoPreguntas(esc, resp) {
+            const opt = esc.opciones[resp.decision];
+            const qs = opt.preguntas || opt.q;
+            return qs.map((q, i) => `
+                <div class="panel">
+                    <p class="mb-2"><strong>${q}</strong></p>
+                    <textarea placeholder="Tu respuesta (opcional)" oninput="state.respuestasSesion[${state.indiceEscenarioActual}].preguntas[${i}] = this.value">${resp.preguntas[i]}</textarea>
+                </div>
+            `).join('');
+        }
+
+        function renderPasoRecurso(esc, resp) {
+            const opt = esc.opciones[resp.decision];
+            const rec = opt.recurso || opt.r;
+            let avisoDiagnostico = "";
+            if (state.diagnostico.tiempo === 'menos10' || (state.diagnostico.recursos.length > 0 && !state.diagnostico.recursos.includes('virtual'))) {
+                avisoDiagnostico = `<div class="alerta-ambar mb-4">Según tu diagnóstico, usa la versión reducida o la alternativa en papel.</div>`;
+            }
+
+            let ejHtml = '';
+            if (rec.tipoEjemplo === 'tabla' || (rec.ej && rec.ej.tipo === 'tabla')) {
+                const cab = rec.ejemploCabeceras || rec.ej.cab;
+                const filas = rec.ejemploFilas || rec.ej.filas;
+                ejHtml = `<table><thead><tr>${cab.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>
+                          ${filas.map(f => `<tr>${f.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+            } else if (rec.tipoEjemplo === 'pasos' || (rec.ej && rec.ej.tipo === 'pasos')) {
+                const items = rec.items || rec.ej.items;
+                ejHtml = `<ol style="padding-left: 20px; margin-top: 12px;">${items.map(i => `<li class="mb-2">${i}</li>`).join('')}</ol>`;
+            } else {
+                const texto = rec.texto || rec.ej.texto;
+                ejHtml = `<div class="panel-sec mt-4" style="font-style:italic;">"${texto}"</div>`;
+            }
+
+            const recName = rec.nombre || rec.n;
+            const recDesc = rec.descripcion || rec.b;
+            const textToCopy = `${recName}\n\n${recDesc}\n\n[Ejemplo sugerido omitido para copia plana]`;
+
+            return `
+                ${avisoDiagnostico}
+                <div class="panel" style="border-top: 4px solid var(--accent-green);">
+                    <h3>${recName}</h3>
+                    <p class="mb-4">${recDesc}</p>
+                    <div class="rotulo mt-4">Ejemplo</div>
+                    ${ejHtml}
+                    <div class="mt-4 flex gap-2">
+                        <button class="btn-sec" onclick="copiarTexto(\`${textToCopy}\`, this)">Copiar recurso</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderPasoRetro(esc, resp) {
+            return `
+                <div class="panel">
+                    <h3>Criterios para la retroalimentación</h3>
+                    <ul style="padding-left: 20px;" class="mb-4">
+                        <li>Señala el error específico, sin rodeos ni generalidades.</li>
+                        <li>Formúlalo como pregunta o pista, sin dar la respuesta.</li>
+                        <li>Indica un siguiente paso concreto y una fecha.</li>
+                        <li>Evita juicios sobre la persona y céntrate en la tarea.</li>
+                    </ul>
+                    <div class="rotulo">Ejemplo sugerido</div>
+                    <p class="panel-sec mb-4" style="font-style: italic;">"${esc.retroEjemplo || esc.ejemplo}"</p>
+                    
+                    <label><strong>Redacta tu retroalimentación:</strong>
+                        <textarea placeholder="Escribe aquí lo que le dirías al estudiante..." oninput="state.respuestasSesion[${state.indiceEscenarioActual}].retro = this.value">${resp.retro}</textarea>
+                    </label>
+                </div>
+            `;
+        }
+
+        function renderPasoReflexion(esc, resp) {
+            return esc.reflexion.map((q, i) => `
+                <div class="panel">
+                    <p class="mb-2"><strong>${q}</strong></p>
+                    <textarea placeholder="Tu respuesta (opcional)" oninput="state.respuestasSesion[${state.indiceEscenarioActual}].reflexion[${i}] = this.value">${resp.reflexion[i]}</textarea>
+                </div>
+            `).join('');
+        }
+
+        function copiarTexto(texto, btn) {
+            navigator.clipboard.writeText(texto).then(() => {
+                const original = btn.innerText;
+                btn.innerText = "Copiado";
+                announce("Recurso copiado.");
+                setTimeout(() => btn.innerText = original, 2000);
+            }).catch(() => {
+                announce("No se pudo copiar.");
+            });
+        }
+
+        // --- VISTA 3: GENERACIÓN IA ---
+        function viewPreGeneracion() {
+            return `
+                <h2>Preguntas de mis documentos</h2>
+                <p>Aula Futura puede analizar tus documentos para generar preguntas y escenarios propios.</p>
+                <div id="ai-alert" class="hidden alerta-error mt-4" role="alert"></div>
+                <div class="mt-4 flex gap-4">
+                    <button id="btn-gen-preg" class="btn-main" onclick="generarPreguntas()">Generar preguntas</button>
+                    <button class="btn-sec" onclick="setView('cierre')">Saltar al cierre</button>
+                </div>
+            `;
+        }
+
+        async function generarPreguntas() {
+            const btn = document.getElementById('btn-gen-preg');
+            const alertBox = document.getElementById('ai-alert');
+            btn.disabled = true;
+            btn.innerText = "Generando…";
+            alertBox.classList.add('hidden');
+            announce("Generando preguntas.");
+
+            const payload = {
+                action: "preguntas",
+                documentos: state.documentos,
+                respuestas: [],
+                asignaturas: state.asignaturas
+            };
+
+            try {
+                const res = await fetch('/.netlify/functions/generar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if(!res.ok) throw new Error("Error de red");
+                const data = await res.json();
+                
+                if(data.preguntas) {
+                    state.preguntasGeneradas = data.preguntas.map(p => ({...p, respuesta: ''}));
+                    announce("Preguntas generadas.");
+                    setView('generacion');
+                }
+            } catch(e) {
+                alertBox.textContent = "No se pudo generar el contenido. Intenta de nuevo en unos minutos.";
+                if(window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1" && !window.location.hostname.includes("netlify.app")) {
+                    alertBox.textContent = "La generación con IA solo funciona en la versión publicada del sitio.";
+                }
+                alertBox.classList.remove('hidden');
+                btn.disabled = false;
+                btn.innerText = "Generar preguntas";
+            }
+        }
+
+        function viewGeneracion() {
+            if (state.escenariosGenerados.length > 0) {
+                return renderEscenariosGeneradosView();
+            }
+
+            // Requisito 5: Muestra la fuente antes del texto de cada pregunta.
+            let html = `<h2>Preguntas de mis documentos</h2><div id="ai-alert-2" class="hidden alerta-error mt-4" role="alert"></div>`;
+            state.preguntasGeneradas.forEach((p, i) => {
+                html += `
+                    <div class="panel">
+                        <div class="rotulo" style="text-transform:none;">${p.asignatura}</div>
+                        <p class="text-sec mb-2" style="font-size:14px;">Fuente: ${p.fuente || state.documentos[0]?.nombre || 'Documento adjunto'}</p>
+                        <p><strong>${p.pregunta}</strong></p>
+                        <textarea placeholder="Tu respuesta" oninput="state.preguntasGeneradas[${i}].respuesta = this.value">${p.respuesta}</textarea>
+                    </div>
+                `;
+            });
+            html += `
+                <div class="flex gap-4 mt-4 mb-4">
+                    <button id="btn-gen-esc" class="btn-main" onclick="generarEscenarios()">Generar escenarios de mi asignatura</button>
+                    <button class="btn-sec" onclick="setView('cierre')">Ir al cierre</button>
+                </div>
+            `;
+            return html;
+        }
+
+        async function generarEscenarios() {
+            if (state.generacionesUsadas >= state.limiteGeneraciones) {
+                alert("Llegaste al límite de generaciones de esta sesión.");
+                return;
+            }
+
+            const btn = document.getElementById('btn-gen-esc');
+            const alertBox = document.getElementById('ai-alert-2');
+            btn.disabled = true;
+            btn.innerText = "Generando…";
+            alertBox.classList.add('hidden');
+            announce("Generando escenarios.");
+
+            const respuestasNoVacias = state.preguntasGeneradas
+                .filter(p => p.respuesta.trim().length > 0)
+                .map(p => ({pregunta: p.pregunta, respuesta: p.respuesta}));
+
+            // Requisito 4: Agrega el objeto diagnóstico al JSON
+            const payload = {
+                action: "escenarios",
+                documentos: state.documentos,
+                respuestas: respuestasNoVacias,
+                asignaturas: state.asignaturas,
+                diagnostico: state.diagnostico 
+            };
+
+            try {
+                const res = await fetch('/.netlify/functions/generar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if(!res.ok) throw new Error("Error");
+                const data = await res.json();
+
+                if(data.escenarios) {
+                    let validos = data.escenarios.filter(e => 
+                        e.options && e.options.length === 4 &&
+                        e.options.every(o => o.q && o.q.length === 3 && o.r && o.r.n && o.r.b && o.r.ej) &&
+                        e.reflexion && e.reflexion.length === 3
+                    );
+                    if(validos.length < data.escenarios.length) {
+                        alert(`Se descartaron ${data.escenarios.length - validos.length} escenarios inválidos.`);
+                    }
+                    
+                    state.escenariosGenerados = validos.map(e => ({...e, estado: 'pendiente'}));
+                    state.generacionesUsadas++;
+                    announce("Escenarios generados.");
+                    render();
+                }
+            } catch(e) {
+                alertBox.textContent = "No se pudo generar el contenido. Intenta de nuevo en unos minutos.";
+                alertBox.classList.remove('hidden');
+                btn.disabled = false;
+                btn.innerText = "Generar escenarios de mi asignatura";
+            }
+        }
+
+        function renderEscenariosGeneradosView() {
+            let html = `<h2>Escenarios de mi asignatura</h2><p>Selecciona cuáles deseas agregar a tu simulación.</p>`;
+            
+            state.escenariosGenerados.forEach((esc, i) => {
+                if(esc.estado !== 'pendiente') return;
+
+                html += `<div class="panel" id="esc-gen-cont-${i}">
+                    <div class="badge mb-2" style="background:#f1e9d0; padding:4px 8px; border-radius:4px; font-size:12px; display:inline-block;">Generado con IA · revisa antes de usar</div>`;
+                
+                // Requisito 1: Muestra asignatura y fuente
+                html += `<h3>${esc.asignatura || 'Asignatura'}</h3>`;
+                html += `<p class="text-sec mb-4">Fuente: ${esc.fuente || state.documentos[0]?.nombre || 'IA'}</p>`;
+                
+                // Requisito 3: Nota faltante
+                if (esc.nota_faltante) {
+                    html += `<div class="alerta-ambar">Revisa: ${esc.nota_faltante}</div>`;
+                }
+
+                html += `<h4>${esc.nombre}</h4>
+                    <div class="panel-sec"><p>${esc.context || esc.contexto}</p></div>
+                    <ul class="mb-4" style="padding-left:20px;">
+                        ${esc.options.map(o => `<li>${o.t}</li>`).join('')}
+                    </ul>
+                    <div class="flex gap-4">
+                        <button class="btn-sec" onclick="editarEscenarioGen(${i})">Editar</button>
+                        <button class="btn-main" onclick="usarEscenarioGen(${i})">Usar en la simulación</button>
+                        <button class="btn-sec" onclick="descartarEscenarioGen(${i})">Descartar</button>
+                    </div>
+                </div>`;
+            });
+
+            if(state.escenariosGenerados.every(e => e.estado !== 'pendiente')) {
+                html += `<div class="panel"><p>No hay más escenarios pendientes.</p>
+                <button class="btn-main mt-4" onclick="setView('cierre')">Ir al cierre</button></div>`;
+            }
+
+            return html;
+        }
+
+        // Requisito 2: Botón Editar para escenarios generados
+        function editarEscenarioGen(idx) {
+            const esc = state.escenariosGenerados[idx];
+            const cont = document.getElementById(`esc-gen-cont-${idx}`);
+            cont.innerHTML = `
+                <div class="badge mb-2" style="background:#f1e9d0; padding:4px 8px; border-radius:4px; font-size:12px; display:inline-block;">Editando escenario generado</div>
+                <h3>${esc.asignatura || 'Asignatura'}</h3>
+                
+                <label>Contexto del escenario:
+                    <textarea id="edit-gen-ctx-${idx}">${esc.context || esc.contexto}</textarea>
+                </label>
+                <label>Opción A: <textarea id="edit-gen-opt-0-${idx}">${esc.options[0].t}</textarea></label>
+                <label>Opción B: <textarea id="edit-gen-opt-1-${idx}">${esc.options[1].t}</textarea></label>
+                <label>Opción C: <textarea id="edit-gen-opt-2-${idx}">${esc.options[2].t}</textarea></label>
+                <label>Opción D: <textarea id="edit-gen-opt-3-${idx}">${esc.options[3].t}</textarea></label>
+                
+                <div class="flex gap-4 mt-4">
+                    <button class="btn-main" onclick="guardarYUsarEscenarioGen(${idx})">Guardar y usar</button>
+                    <button class="btn-sec" onclick="render()">Cancelar</button>
+                </div>
+            `;
+        }
+
+        function guardarYUsarEscenarioGen(idx) {
+            const esc = state.escenariosGenerados[idx];
+            esc.context = document.getElementById(`edit-gen-ctx-${idx}`).value.trim();
+            esc.options[0].t = document.getElementById(`edit-gen-opt-0-${idx}`).value.trim();
+            esc.options[1].t = document.getElementById(`edit-gen-opt-1-${idx}`).value.trim();
+            esc.options[2].t = document.getElementById(`edit-gen-opt-2-${idx}`).value.trim();
+            esc.options[3].t = document.getElementById(`edit-gen-opt-3-${idx}`).value.trim();
+            
+            usarEscenarioGen(idx);
+        }
+
+        function usarEscenarioGen(idx) {
+            state.escenariosGenerados[idx].estado = 'usado';
+            const esc = state.escenariosGenerados[idx];
+            esc.nivel = 'Generado'; // Marca para el cierre
+            state.secuenciaEscenarios.push(esc);
+            state.respuestasSesion.push({ decision: null, preguntas: ['', '', ''], retro: '', reflexion: ['', '', ''] });
+            
+            state.indiceEscenarioActual = state.secuenciaEscenarios.length - 1;
+            state.pasoActual = 1;
+            setView('simulacion');
+        }
+
+        function descartarEscenarioGen(idx) {
+            state.escenariosGenerados[idx].estado = 'descartado';
+            render();
+        }
+
+        // --- VISTA 4: CREAR ESCENARIO MANUAL ---
+        function viewCrearEscenario() {
+            return `
+                <h2>Crear mi escenario</h2>
+                <div class="alerta-ambar mb-4">Describe una situación real de tu aula, anonimizada. No incluyas nombres de estudiantes ni datos que permitan identificarlos. Lo que escribas aquí se pierde al cerrar la página.</div>
+                
+                <div class="panel">
+                    <label>Nombre del escenario (máx. 60 caracteres)
+                        <input type="text" id="man-nombre" placeholder="Ej. El examen que no se entendió" maxlength="60">
+                    </label>
+                    <label>Contexto
+                        <textarea id="man-ctx" placeholder="Describe la situación..."></textarea>
+                    </label>
+                    <div id="man-alert" class="hidden alerta-error" role="alert"></div>
+                    
+                    <div class="mt-4 flex gap-2">
+                        <button id="btn-ia-decisiones" class="btn-sec" onclick="generarDecisionesManual()">Generar decisiones con IA</button>
+                    </div>
+
+                    <h3 class="mt-4">Decisiones posibles</h3>
+                    <label>Opción a) <textarea id="man-opt-a"></textarea></label>
+                    <label>Opción b) <textarea id="man-opt-b"></textarea></label>
+                    <label>Opción c) <textarea id="man-opt-c"></textarea></label>
+                    <label>Opción d) <textarea id="man-opt-d"></textarea></label>
+
+                    <div class="flex gap-4 mt-4">
+                        <button class="btn-sec" onclick="setView('${state.indiceEscenarioActual > 0 ? 'cierre' : 'diagnostico'}')">Cancelar</button>
+                        <button class="btn-main" onclick="guardarEscenarioManual()">Crear escenario</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function generarDecisionesManual() {
+            const ctx = document.getElementById('man-ctx').value.trim();
+            const alertBox = document.getElementById('man-alert');
+            alertBox.classList.add('hidden');
+
+            if(ctx.length < 20) {
+                alertBox.textContent = "Describe primero el contexto del escenario.";
+                alertBox.classList.remove('hidden');
+                return;
+            }
+
+            const btn = document.getElementById('btn-ia-decisiones');
+            btn.disabled = true;
+            btn.innerText = "Generando…";
+            announce("Generando decisiones.");
+
+            try {
+                // Función conectable a modelo de lenguaje. No incluye claves.
+                const res = await fetch('/.netlify/functions/generar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: "decisiones", contexto: ctx })
+                });
+                
+                if(res.ok) {
+                    const data = await res.json();
+                    if(data.opciones && data.opciones.length === 4) {
+                        document.getElementById('man-opt-a').value = data.opciones[0];
+                        document.getElementById('man-opt-b').value = data.opciones[1];
+                        document.getElementById('man-opt-c').value = data.opciones[2];
+                        document.getElementById('man-opt-d').value = data.opciones[3];
+                    }
+                } else {
+                    throw new Error("Fallo");
+                }
+            } catch(e) {
+                alertBox.textContent = "No se pudo generar el contenido. Intenta de nuevo en unos minutos.";
+                alertBox.classList.remove('hidden');
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Generar decisiones con IA";
+            }
+        }
+
+        function guardarEscenarioManual() {
+            const nombre = document.getElementById('man-nombre').value.trim();
+            const ctx = document.getElementById('man-ctx').value.trim();
+            const opts = [
+                document.getElementById('man-opt-a').value.trim(),
+                document.getElementById('man-opt-b').value.trim(),
+                document.getElementById('man-opt-c').value.trim(),
+                document.getElementById('man-opt-d').value.trim()
+            ];
+            const alertBox = document.getElementById('man-alert');
+
+            if (!nombre) { alertBox.textContent = "Escribe un nombre para el escenario."; alertBox.classList.remove('hidden'); return; }
+            if (!ctx) { alertBox.textContent = "Describe el contexto del escenario."; alertBox.classList.remove('hidden'); return; }
+            if (opts.some(o => !o)) { alertBox.textContent = "Escribe las cuatro decisiones posibles."; alertBox.classList.remove('hidden'); return; }
+            
+            const unicas = new Set(opts.map(o => o.toLowerCase()));
+            if (unicas.size < 4) { alertBox.textContent = "Las cuatro decisiones deben ser distintas."; alertBox.classList.remove('hidden'); return; }
+
+            const nuevo = {
+                nombre: nombre,
+                titulo: "Escenario propio",
+                etiqueta: "Escenario propio · anonimizado",
+                nivel: "Propio",
+                contexto: ctx,
+                opciones: opts.map((o, i) => ({
+                    letra: ['A','B','C','D'][i],
+                    texto: o,
+                    preguntas: ["¿Qué consecuencias tendrá esta decisión para los estudiantes que más lo necesitan?", "¿Qué información tienes para sostener esta decisión y qué información te falta?", "¿Cómo sabrás, en la próxima sesión, si la decisión funcionó?"],
+                    recurso: {
+                        nombre: "Plan de una sesión",
+                        descripcion: "Objetivo, actividad y evidencia de logro para la siguiente sesión.",
+                        tipoEjemplo: "tabla",
+                        ejemploCabeceras: ["Momento", "Actividad", "Evidencia de logro"],
+                        ejemploFilas: [
+                            ["Inicio", "Activar el conocimiento previo con una pregunta", "Respuestas de al menos la mitad del grupo"],
+                            ["Desarrollo", "Resolver un caso en parejas", "Un procedimiento explicado con sus propias palabras"],
+                            ["Cierre", "Pedir una idea que se lleve cada estudiante", "Registro de ideas al final de la clase"]
+                        ]
+                    }
+                })),
+                retroEjemplo: "Lo que observé en la clase fue... Lo que vamos a hacer es... Lo revisamos el...",
+                reflexion: ["¿Qué evidencia tienes para sostener tu decisión?", "¿Qué costo tiene para el grupo la opción que elegiste?", "¿Qué cambiarías si el problema fuera distinto a como lo describiste?"]
+            };
+
+            state.secuenciaEscenarios.push(nuevo);
+            state.respuestasSesion.push({ decision: null, preguntas: ['', '', ''], retro: '', reflexion: ['', '', ''] });
+            
+            announce("Escenario creado.");
+            
+            state.indiceEscenarioActual = state.secuenciaEscenarios.length - 1;
+            state.pasoActual = 1;
+            setView('simulacion');
+        }
+
+        // --- VISTA 5: CIERRE ---
+        function viewCierre() {
+            const completados = state.respuestasSesion.filter(r => r.decision !== null).length;
+            
+            // Gráfico de dificultad
+            let graficoHtml = `<div class="dificultad-grafico">`;
+            state.secuenciaEscenarios.forEach((esc, i) => {
+                const resp = state.respuestasSesion[i];
+                let height = "20%";
+                let labelNivel = esc.nivel;
+                let frase = "Escenario propio";
+                
+                if (esc.nivel === 1) { height = "50%"; frase = "Evidencia clara"; labelNivel = "Nivel 1"; }
+                if (esc.nivel === 2) { height = "90%"; frase = "Evidencia ambigua"; labelNivel = "Nivel 2"; }
+                if (esc.nivel === "Generado") { height = "70%"; frase = "Generado con IA"; labelNivel = "Generado"; }
+                
+                const opacity = (resp && resp.decision !== null) ? '1' : '0.3';
+                
+                graficoHtml += `
+                    <div class="dificultad-col" style="opacity: ${opacity}">
+                        <div class="dificultad-barra" style="height: ${height};"></div>
+                        <div class="dificultad-label">${esc.nombre}</div>
+                        <div class="dificultad-nivel"><strong>${labelNivel}</strong><br>${frase}</div>
+                    </div>
+                `;
+            });
+            graficoHtml += `</div>`;
+
+            // Resumen de escenarios
+            let resumenHtml = '';
+            state.secuenciaEscenarios.forEach((esc, i) => {
+                const resp = state.respuestasSesion[i];
+                resumenHtml += `<div class="panel-sec">
+                    <h4>${esc.nombre}</h4>`;
+                
+                if (resp && resp.decision !== null) {
+                    const opt = esc.opciones[resp.decision];
+                    const rec = opt.recurso || opt.r;
+                    resumenHtml += `
+                        <p><strong>Decisión:</strong> ${opt.texto || opt.t}</p>
+                        <p><strong>Recurso sugerido:</strong> ${rec.nombre || rec.n} - ${rec.descripcion || rec.b}</p>
+                        ${resp.retro ? `<p><strong>Tu retroalimentación:</strong> ${resp.retro}</p>` : ''}
+                    `;
+                } else {
+                    resumenHtml += `<p>Sin decisión registrada.</p>`;
+                }
+                resumenHtml += `</div>`;
+            });
+
+            // Asignaturas y Documentos
+            let metasHtml = '';
+            if (state.asignaturas.length > 0) {
+                metasHtml += `<h3>Mis asignaturas</h3><ul>${state.asignaturas.map(a => `<li>${a.nombre} (${a.nivel || '-'}) - ${a.estudiantes || '-'} est.</li>`).join('')}</ul>`;
+            }
+            if (state.documentos.length > 0) {
+                metasHtml += `<h3>Documentos cargados</h3><ul>${state.documentos.map(d => `<li>${d.nombre}</li>`).join('')}</ul>`;
+            }
+            if (state.generacionesUsadas > 0) {
+                metasHtml += `<div class="alerta-ambar mb-4">Los escenarios generados dependen de tus documentos. Revísalos antes de llevarlos al aula.</div>`;
+            }
+
+            return `
+                <div id="cierre-texto-completo">
+                    <h2>Dificultad por escenario</h2>
+                    <p class="text-sec">Cada escenario presenta una decisión con más ambigüedad que el anterior. Las barras se completan a medida que avanzas.</p>
+                    <p class="text-sec"><em>La curva muestra el avance por la simulación, no tu desempeño.</em></p>
+                    ${graficoHtml}
+
+                    <h2 class="mt-4">Cierre de la simulación</h2>
+                    <p>Completaste los ${completados} escenarios. Estas son las decisiones que tomaste y los recursos que te sugirió la herramienta.</p>
+                    
+                    ${metasHtml}
+                    <div class="mt-4">${resumenHtml}</div>
+                    
+                    <p class="text-sec mt-4">Este prototipo no califica tu desempeño. Su propósito es que practiques decisiones didácticas y reflexiones sobre ellas.</p>
+                </div>
+
+                <div class="flex gap-4 mt-4 mb-4">
+                    <button id="btn-copiar-resumen" class="btn-main" onclick="copiarResumen()">Copiar resumen</button>
+                    <button class="btn-sec" onclick="setView('manual')">Crear mi escenario</button>
+                    <button class="btn-sec" onclick="reiniciarTodo()">Reiniciar todo</button>
+                </div>
+
+                <details class="panel mt-4">
+                    <summary>Fundamento</summary>
+                    <p>La retroalimentación formativa mejora el aprendizaje cuando indica qué se está haciendo bien, qué falta y hacia dónde seguir. Hattie y Timperley (2007) sostienen que la retroalimentación es más eficaz cuando responde a tres preguntas: hacia dónde voy, cómo voy y qué sigue.</p>
+                    <p>Las preguntas socráticas invitan a examinar las consecuencias de una decisión sin entregar una respuesta. En la formación docente, esta forma de cuestionamiento permite revisar la práctica antes de llevarla al aula.</p>
+                    <p>La toma de decisiones didácticas es una competencia que se desarrolla con práctica deliberada, retroalimentación y reflexión posterior.</p>
+                    <p style="font-size:12px; color:var(--text-sec); margin-top:16px;">Hattie, J., y Timperley, H. (2007). The power of feedback. Review of Educational Research, 77(1), 81–112. https://doi.org/10.3102/003465430298487</p>
+                </details>
+            `;
+        }
+
+        function copiarResumen() {
+            const texto = document.getElementById('cierre-texto-completo').innerText;
+            const btn = document.getElementById('btn-copiar-resumen');
+            navigator.clipboard.writeText(texto).then(() => {
+                const original = btn.innerText;
+                btn.innerText = "Copiado";
+                announce("Resumen copiado.");
+                setTimeout(() => btn.innerText = original, 2000);
+            }).catch(() => {
+                announce("No se pudo copiar. Selecciona el texto del resumen.");
+            });
+        }
+
+        function reiniciarTodo() {
+            state = {
+                docente: { nombre: '', institucion: '' },
+                privacidadAceptada: false,
+                asignaturas: [],
+                documentos: [],
+                diagnostico: { grupo: '', tiempo: '', recursos: [], materiales: '', nivel: '' },
+                secuenciaEscenarios: [...ESCENARIOS_FIJOS],
+                indiceEscenarioActual: 0,
+                pasoActual: 1,
+                respuestasSesion: [],
+                preguntasGeneradas: [],
+                escenariosGenerados: [],
+                limiteGeneraciones: 3,
+                generacionesUsadas: 0,
+                vistaActual: 'registro'
+            };
+            announce("Simulación reiniciada por completo.");
+            render();
+            window.scrollTo(0,0);
+        }
+
+        // Inicializar vista
+        render();
+
+    </script>
+</body>
+</html>

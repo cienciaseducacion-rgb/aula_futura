@@ -61,11 +61,15 @@ exports.handler = async (event) => {
         generationConfig: { responseMimeType: "application/json", temperature: 0.4 },
       }),
     });
-    if (!res.ok) return json(502, { error: "El modelo no respondió. Intenta de nuevo en unos minutos." });
+    if (!res.ok) {
+      console.error("Gemini respondió con error", res.status, (await res.text()).slice(0, 500));
+      return json(502, { error: "El modelo no respondió. Intenta de nuevo en unos minutos." });
+    }
     const data = await res.json();
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     return json(200, JSON.parse(text));
-  } catch {
+  } catch (e) {
+    console.error("Error al generar", String(e).slice(0, 300));
     return json(502, { error: "No se pudo generar el contenido. Revisa el texto e intenta de nuevo." });
   } finally {
     clearTimeout(timer);
